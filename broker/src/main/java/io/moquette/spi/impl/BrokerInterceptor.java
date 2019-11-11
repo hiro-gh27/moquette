@@ -16,16 +16,8 @@
 
 package io.moquette.spi.impl;
 
-import io.moquette.BrokerConstants;
-import io.moquette.interception.InterceptHandler;
-import io.moquette.interception.Interceptor;
-import io.moquette.interception.messages.*;
-import io.moquette.server.config.IConfig;
-import io.moquette.spi.impl.subscriptions.Subscription;
-import io.netty.handler.codec.mqtt.MqttConnectMessage;
-import io.netty.handler.codec.mqtt.MqttPublishMessage;
-import org.slf4j.Logger;
-import org.slf4j.LoggerFactory;
+import static io.moquette.logging.LoggingUtils.getInterceptorIds;
+
 import java.util.HashMap;
 import java.util.List;
 import java.util.Map;
@@ -33,12 +25,37 @@ import java.util.concurrent.CopyOnWriteArrayList;
 import java.util.concurrent.ExecutorService;
 import java.util.concurrent.Executors;
 import java.util.concurrent.TimeUnit;
-import static io.moquette.logging.LoggingUtils.getInterceptorIds;
+
+import org.piax.ayame.tracer.GlobalTracerResolver;
+import org.piax.ayame.tracer.message.TracerMessageBuilder;
+import org.slf4j.Logger;
+import org.slf4j.LoggerFactory;
+
+import com.google.common.util.concurrent.ThreadFactoryBuilder;
+
+import io.moquette.BrokerConstants;
+import io.moquette.interception.InterceptHandler;
+import io.moquette.interception.Interceptor;
+import io.moquette.interception.messages.InterceptAcknowledgedMessage;
+import io.moquette.interception.messages.InterceptConnectMessage;
+import io.moquette.interception.messages.InterceptConnectionLostMessage;
+import io.moquette.interception.messages.InterceptDisconnectMessage;
+import io.moquette.interception.messages.InterceptPublishMessage;
+import io.moquette.interception.messages.InterceptSubscribeMessage;
+import io.moquette.interception.messages.InterceptUnsubscribeMessage;
+import io.moquette.server.config.IConfig;
+import io.moquette.spi.impl.subscriptions.Subscription;
+import io.netty.handler.codec.mqtt.MqttConnectMessage;
+import io.netty.handler.codec.mqtt.MqttPublishMessage;
+import io.opentracing.Scope;
+import io.opentracing.Span;
+import io.opentracing.Tracer;
 
 /**
  * An interceptor that execute the interception tasks asynchronously.
  */
 final class BrokerInterceptor implements Interceptor {
+    Tracer tracer = GlobalTracerResolver.resolve();
 
     private static final Logger LOG = LoggerFactory.getLogger(BrokerInterceptor.class);
     private final Map<Class<?>, List<InterceptHandler>> handlers;
@@ -53,7 +70,8 @@ final class BrokerInterceptor implements Interceptor {
         for (InterceptHandler handler : handlers) {
             this.addInterceptHandler(handler);
         }
-        executor = Executors.newFixedThreadPool(poolSize);
+        ThreadFactoryBuilder threadFactoryBuilder = new ThreadFactoryBuilder().setNameFormat("moquette-interceptor-poo%d");
+        executor = Executors.newFixedThreadPool(poolSize, threadFactoryBuilder.build());
     }
 
     /**
@@ -120,10 +138,18 @@ final class BrokerInterceptor implements Interceptor {
     public void notifyTopicPublished(final MqttPublishMessage msg, final String clientID, final String username) {
         int messageId = msg.variableHeader().messageId();
         String topic = msg.variableHeader().topicName();
+        Span span = tracer.buildSpan(msg.variableHeader().topicName()).start();
+        span.log(TracerMessageBuilder.fastBuild(LOG, "", msg));
+
         for (final InterceptHandler handler : this.handlers.get(InterceptPublishMessage.class)) {
             LOG.debug("Notifying MQTT PUBLISH message to interceptor. CId={}, messageId={}, topic={}, interceptorId={}",
                 clientID, messageId, topic, handler.getID());
-            executor.execute(() -> handler.onPublish(new InterceptPublishMessage(msg, clientID, username)));
+            executor.execute(() -> {
+                try (Scope ignored = tracer.activateSpan(span)) {
+                    span.log(TracerMessageBuilder.fastBuild(LOG,"", msg));
+                    handler.onPublish(new InterceptPublishMessage(msg, clientID, username));
+                }
+            });
         }
     }
 
