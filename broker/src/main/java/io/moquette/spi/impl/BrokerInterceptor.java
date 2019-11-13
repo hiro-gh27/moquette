@@ -21,13 +21,12 @@ import static io.moquette.logging.LoggingUtils.getInterceptorIds;
 import java.util.HashMap;
 import java.util.List;
 import java.util.Map;
+import java.util.Objects;
 import java.util.concurrent.CopyOnWriteArrayList;
 import java.util.concurrent.ExecutorService;
 import java.util.concurrent.Executors;
 import java.util.concurrent.TimeUnit;
 
-import org.piax.ayame.tracer.GlobalTracerResolver;
-import org.piax.ayame.tracer.message.TracerMessageBuilder;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 
@@ -50,12 +49,13 @@ import io.netty.handler.codec.mqtt.MqttPublishMessage;
 import io.opentracing.Scope;
 import io.opentracing.Span;
 import io.opentracing.Tracer;
+import io.opentracing.util.GlobalTracer;
 
 /**
  * An interceptor that execute the interception tasks asynchronously.
  */
 final class BrokerInterceptor implements Interceptor {
-    Tracer tracer = GlobalTracerResolver.resolve();
+    private Tracer tracer = GlobalTracer.get();
 
     private static final Logger LOG = LoggerFactory.getLogger(BrokerInterceptor.class);
     private final Map<Class<?>, List<InterceptHandler>> handlers;
@@ -138,15 +138,20 @@ final class BrokerInterceptor implements Interceptor {
     public void notifyTopicPublished(final MqttPublishMessage msg, final String clientID, final String username) {
         int messageId = msg.variableHeader().messageId();
         String topic = msg.variableHeader().topicName();
-        Span span = tracer.buildSpan(msg.variableHeader().topicName()).start();
-        span.log(TracerMessageBuilder.fastBuild(LOG, "", msg));
 
+        final Span span;
+        if (Objects.isNull(tracer.activeSpan())){
+            span =  tracer.buildSpan(msg.variableHeader().topicName()).start();
+        }else {
+            span = tracer.activeSpan();
+        }
         for (final InterceptHandler handler : this.handlers.get(InterceptPublishMessage.class)) {
             LOG.debug("Notifying MQTT PUBLISH message to interceptor. CId={}, messageId={}, topic={}, interceptorId={}",
                 clientID, messageId, topic, handler.getID());
             executor.execute(() -> {
                 try (Scope ignored = tracer.activateSpan(span)) {
-                    span.log(TracerMessageBuilder.fastBuild(LOG,"", msg));
+                    LOG.debug("Invoke MQTT PUBLISH message by Handler. CId={}, messageId={}, topic={}, interceptorId={}",
+                              clientID, messageId, topic, handler.getID());
                     handler.onPublish(new InterceptPublishMessage(msg, clientID, username));
                 }
             });
