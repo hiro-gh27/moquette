@@ -16,15 +16,17 @@
 
 package io.moquette.spi.impl;
 
+import static io.moquette.spi.impl.ProtocolProcessor.asStoredMessage;
+
+import org.slf4j.Logger;
+import org.slf4j.LoggerFactory;
+
 import io.moquette.server.netty.NettyUtils;
 import io.moquette.spi.IMessagesStore;
 import io.moquette.spi.impl.subscriptions.Topic;
 import io.moquette.spi.security.IAuthorizator;
 import io.netty.channel.Channel;
 import io.netty.handler.codec.mqtt.MqttPublishMessage;
-import org.slf4j.Logger;
-import org.slf4j.LoggerFactory;
-import static io.moquette.spi.impl.ProtocolProcessor.asStoredMessage;
 
 class Qos0PublishHandler extends QosPublishHandler {
 
@@ -56,7 +58,8 @@ class Qos0PublishHandler extends QosPublishHandler {
         IMessagesStore.StoredMessage toStoreMsg = asStoredMessage(msg);
         toStoreMsg.setClientID(clientID);
 
-        this.publisher.publish2Subscribers(toStoreMsg, topic);
+        // TODO: This is Experiment for PIAX overlay pub/sub
+        //this.publisher.publish2Subscribers(toStoreMsg, topic);
 
         if (msg.fixedHeader().isRetain()) {
             // QoS == 0 && retain => clean old retained
